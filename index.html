@@ -1,0 +1,356 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+  <meta name="theme-color" content="#0b0b12" />
+  <meta name="description" content="TikTok LIVEのコメントをスマホで音声読み上げするWebアプリ" />
+  <title>TikTok コメント読み上げ</title>
+
+  <link rel="manifest" href="manifest.webmanifest" />
+  <link rel="apple-touch-icon" href="icon.svg" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="apple-mobile-web-app-title" content="コメント読み上げ" />
+
+  <style>
+    :root {
+      --bg: #0b0b12;
+      --panel: #15151f;
+      --panel-2: #1d1d2a;
+      --line: #2a2a3a;
+      --text: #f2f2f7;
+      --muted: #9a9ab0;
+      --accent: #fe2c55;     /* TikTok red */
+      --accent-2: #25f4ee;   /* TikTok cyan */
+      --ok: #3ddc97;
+      --warn: #ffb020;
+      --radius: 14px;
+    }
+
+    * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+
+    html, body {
+      margin: 0;
+      padding: 0;
+      background: var(--bg);
+      color: var(--text);
+      font-family: -apple-system, BlinkMacSystemFont, "Hiragino Kaku Gothic ProN",
+        "Hiragino Sans", "Noto Sans JP", Meiryo, sans-serif;
+      -webkit-font-smoothing: antialiased;
+    }
+
+    body {
+      min-height: 100dvh;
+      display: flex;
+      flex-direction: column;
+      padding: env(safe-area-inset-top) env(safe-area-inset-right)
+        env(safe-area-inset-bottom) env(safe-area-inset-left);
+    }
+
+    header {
+      position: sticky;
+      top: 0;
+      z-index: 10;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 12px 16px;
+      background: rgba(11, 11, 18, 0.85);
+      backdrop-filter: blur(10px);
+      border-bottom: 1px solid var(--line);
+    }
+    header h1 {
+      font-size: 16px;
+      margin: 0;
+      font-weight: 700;
+      letter-spacing: 0.02em;
+      flex: 1;
+    }
+    .logo {
+      width: 26px; height: 26px; flex: 0 0 auto;
+      background:
+        radial-gradient(circle at 30% 30%, var(--accent-2), transparent 60%),
+        radial-gradient(circle at 70% 70%, var(--accent), transparent 60%),
+        #000;
+      border-radius: 8px;
+    }
+    .status {
+      display: inline-flex; align-items: center; gap: 6px;
+      font-size: 12px; color: var(--muted);
+      padding: 4px 10px; border: 1px solid var(--line);
+      border-radius: 999px; white-space: nowrap;
+    }
+    .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); }
+    .status.connected .dot { background: var(--ok); box-shadow: 0 0 8px var(--ok); }
+    .status.connecting .dot { background: var(--warn); animation: pulse 1s infinite; }
+    .status.error .dot { background: var(--accent); }
+    @keyframes pulse { 50% { opacity: 0.3; } }
+
+    main {
+      flex: 1;
+      width: 100%;
+      max-width: 680px;
+      margin: 0 auto;
+      padding: 14px;
+      display: flex;
+      flex-direction: column;
+      gap: 14px;
+    }
+
+    .card {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      padding: 14px;
+    }
+    .card h2 {
+      font-size: 13px; color: var(--muted); margin: 0 0 10px;
+      text-transform: uppercase; letter-spacing: 0.08em; font-weight: 700;
+    }
+
+    .row { display: flex; gap: 10px; align-items: center; }
+    .row + .row { margin-top: 10px; }
+
+    input[type="text"], select {
+      width: 100%;
+      background: var(--panel-2);
+      border: 1px solid var(--line);
+      color: var(--text);
+      padding: 12px 14px;
+      border-radius: 10px;
+      font-size: 16px; /* >=16px prevents iOS zoom */
+      outline: none;
+    }
+    input[type="text"]:focus, select:focus { border-color: var(--accent-2); }
+
+    button {
+      font-family: inherit;
+      font-size: 15px;
+      font-weight: 700;
+      border: none;
+      border-radius: 10px;
+      padding: 12px 16px;
+      color: #fff;
+      background: var(--panel-2);
+      cursor: pointer;
+      transition: transform .05s ease, opacity .15s ease;
+    }
+    button:active { transform: scale(0.97); }
+    button:disabled { opacity: 0.4; cursor: not-allowed; }
+    button.primary { background: var(--accent); }
+    button.cyan { background: #0e6e6a; }
+    button.ghost { background: transparent; border: 1px solid var(--line); color: var(--text); }
+    .grow { flex: 1; }
+
+    /* Big speak toggle */
+    .speak-toggle {
+      width: 100%;
+      padding: 18px;
+      font-size: 18px;
+      background: linear-gradient(135deg, var(--accent), #c01e40);
+      display: flex; align-items: center; justify-content: center; gap: 10px;
+    }
+    .speak-toggle.on { background: linear-gradient(135deg, #0e6e6a, #0a4f4c); }
+
+    label.field { display: block; font-size: 13px; color: var(--muted); margin-bottom: 6px; }
+
+    .slider-row { display: grid; grid-template-columns: 1fr auto; gap: 8px; align-items: center; }
+    .slider-row .val { font-variant-numeric: tabular-nums; font-size: 13px; color: var(--text); min-width: 42px; text-align: right; }
+    input[type="range"] { width: 100%; accent-color: var(--accent); }
+
+    .switch { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 8px 0; }
+    .switch span { font-size: 15px; }
+    .toggle { position: relative; width: 48px; height: 28px; flex: 0 0 auto; }
+    .toggle input { opacity: 0; width: 0; height: 0; }
+    .toggle .track { position: absolute; inset: 0; background: var(--panel-2); border: 1px solid var(--line); border-radius: 999px; transition: .2s; }
+    .toggle .thumb { position: absolute; top: 3px; left: 3px; width: 22px; height: 22px; background: #fff; border-radius: 50%; transition: .2s; }
+    .toggle input:checked + .track { background: var(--accent); border-color: var(--accent); }
+    .toggle input:checked + .track + .thumb { transform: translateX(20px); }
+
+    details > summary { cursor: pointer; list-style: none; font-size: 13px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.08em; font-weight: 700; }
+    details > summary::-webkit-details-marker { display: none; }
+    details > summary::after { content: " ▾"; }
+    details[open] > summary::after { content: " ▴"; }
+
+    /* Comment feed */
+    .feed { display: flex; flex-direction: column; gap: 8px; }
+    .feed:empty::after { content: "コメントはここに表示されます"; color: var(--muted); font-size: 14px; }
+    .comment {
+      background: var(--panel-2);
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      padding: 10px 12px;
+      animation: slideIn .2s ease;
+    }
+    .comment.speaking { border-color: var(--accent-2); box-shadow: 0 0 0 1px var(--accent-2) inset; }
+    .comment .name { font-size: 12px; color: var(--accent-2); font-weight: 700; margin-bottom: 2px; }
+    .comment .text { font-size: 15px; word-break: break-word; }
+    @keyframes slideIn { from { opacity: 0; transform: translateY(-6px); } }
+
+    .queue-info { font-size: 12px; color: var(--muted); display: flex; justify-content: space-between; align-items: center; }
+
+    .hint { font-size: 12px; color: var(--muted); line-height: 1.6; }
+    .hint code { background: var(--panel-2); padding: 1px 6px; border-radius: 6px; }
+    a { color: var(--accent-2); }
+
+    .banner {
+      font-size: 13px; line-height: 1.6;
+      background: rgba(255, 176, 32, 0.1);
+      border: 1px solid rgba(255, 176, 32, 0.35);
+      color: #ffd98a;
+      border-radius: 10px; padding: 10px 12px;
+    }
+    .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+
+    footer { text-align: center; padding: 18px; color: var(--muted); font-size: 11px; }
+  </style>
+</head>
+<body>
+  <header>
+    <div class="logo" aria-hidden="true"></div>
+    <h1>コメント読み上げ</h1>
+    <span class="status" id="status"><span class="dot"></span><span id="statusText">未接続</span></span>
+  </header>
+
+  <main>
+    <!-- Speak toggle (also unlocks audio on iOS) -->
+    <button class="speak-toggle" id="speakToggle">
+      <span id="speakIcon">🔊</span><span id="speakLabel">読み上げを開始</span>
+    </button>
+    <p class="hint" id="unlockHint" style="margin:-6px 2px 0;">
+      ※ iPhone/Androidでは最初に上のボタンを一度タップして音声を有効化してください。
+    </p>
+
+    <!-- Connection -->
+    <section class="card">
+      <h2>① 配信に接続</h2>
+      <div class="row">
+        <input type="text" id="username" class="grow" placeholder="配信者のユーザー名（例: @tiktok）"
+          autocapitalize="off" autocomplete="off" spellcheck="false" inputmode="text" />
+      </div>
+      <div class="row">
+        <button class="primary grow" id="connectBtn">接続</button>
+        <button class="ghost" id="disconnectBtn" disabled>切断</button>
+      </div>
+      <div class="row" style="margin-top:10px;">
+        <button class="cyan grow" id="demoBtn">🧪 デモ（接続なしで試す）</button>
+      </div>
+    </section>
+
+    <!-- Feed -->
+    <section class="card">
+      <div class="queue-info" style="margin-bottom:10px;">
+        <h2 style="margin:0;">コメント</h2>
+        <span id="queueInfo">待機 0 件</span>
+      </div>
+      <div class="feed" id="feed"></div>
+    </section>
+
+    <!-- Settings -->
+    <section class="card">
+      <details id="settings">
+        <summary>読み上げ設定</summary>
+        <div style="margin-top:14px; display:flex; flex-direction:column; gap:14px;">
+          <div>
+            <label class="field" for="voice">音声（日本語推奨）</label>
+            <select id="voice"></select>
+          </div>
+
+          <div>
+            <label class="field">速さ <span id="rateVal" class="val"></span></label>
+            <div class="slider-row">
+              <input type="range" id="rate" min="0.5" max="2" step="0.1" value="1.1" />
+              <span class="val" id="rateOut">1.1</span>
+            </div>
+          </div>
+          <div>
+            <label class="field">高さ <span id="pitchVal" class="val"></span></label>
+            <div class="slider-row">
+              <input type="range" id="pitch" min="0" max="2" step="0.1" value="1" />
+              <span class="val" id="pitchOut">1.0</span>
+            </div>
+          </div>
+          <div>
+            <label class="field">音量</label>
+            <div class="slider-row">
+              <input type="range" id="volume" min="0" max="1" step="0.05" value="1" />
+              <span class="val" id="volumeOut">100%</span>
+            </div>
+          </div>
+
+          <div class="switch">
+            <span>投稿者名を読む</span>
+            <label class="toggle"><input type="checkbox" id="readName" /><span class="track"></span><span class="thumb"></span></label>
+          </div>
+          <div class="switch">
+            <span>絵文字を読まない</span>
+            <label class="toggle"><input type="checkbox" id="stripEmoji" checked /><span class="track"></span><span class="thumb"></span></label>
+          </div>
+          <div class="switch">
+            <span>URLを含むコメントを飛ばす</span>
+            <label class="toggle"><input type="checkbox" id="skipUrl" checked /><span class="track"></span><span class="thumb"></span></label>
+          </div>
+          <div class="switch">
+            <span>混雑時は古いコメントを飛ばす</span>
+            <label class="toggle"><input type="checkbox" id="dropWhenBusy" checked /><span class="track"></span><span class="thumb"></span></label>
+          </div>
+
+          <div>
+            <label class="field">1コメントの最大文字数（超過分はカット）</label>
+            <div class="slider-row">
+              <input type="range" id="maxLen" min="20" max="200" step="10" value="80" />
+              <span class="val" id="maxLenOut">80</span>
+            </div>
+          </div>
+          <div>
+            <label class="field">待機キューの上限（超えたら古い順に破棄）</label>
+            <div class="slider-row">
+              <input type="range" id="maxQueue" min="1" max="20" step="1" value="6" />
+              <span class="val" id="maxQueueOut">6</span>
+            </div>
+          </div>
+
+          <div class="grid2">
+            <button class="ghost" id="testBtn">🔈 テスト読み上げ</button>
+            <button class="ghost" id="clearBtn">🗑 キュー消去</button>
+          </div>
+        </div>
+      </details>
+    </section>
+
+    <!-- Advanced -->
+    <section class="card">
+      <details>
+        <summary>サーバー設定（上級者向け）</summary>
+        <div style="margin-top:14px; display:flex; flex-direction:column; gap:10px;">
+          <p class="hint">
+            コメント取得には TikTok チャット中継サーバーが必要です。既定では公開中継サーバーに接続しますが、
+            自前で <a href="https://github.com/zerodytrash/TikTok-Chat-Reader" target="_blank" rel="noopener">TikTok-Chat-Reader</a>
+            を立てて、その URL を指定すると安定します。
+          </p>
+          <div>
+            <label class="field" for="serverUrl">中継サーバー URL</label>
+            <input type="text" id="serverUrl" placeholder="https://tiktok-chat-reader.zerody.one/"
+              autocapitalize="off" autocomplete="off" spellcheck="false" />
+          </div>
+        </div>
+      </details>
+    </section>
+
+    <p class="banner" id="iosNote" hidden>
+      ⚠️ iPhone はバックグラウンドや画面ロック中に読み上げが止まる仕様です。画面を点けたまま使ってください。
+    </p>
+
+    <p class="hint">
+      本アプリはあなた自身の配信・視聴の補助を目的としたものです。TikTok の利用規約の範囲でご利用ください。
+    </p>
+  </main>
+
+  <footer>TikTok Comment TTS · ブラウザだけで動作</footer>
+
+  <!-- Socket.IO client (used to talk to the chat relay server) -->
+  <script src="https://cdn.socket.io/4.7.5/socket.io.min.js" crossorigin="anonymous"></script>
+  <script src="app.js" defer></script>
+</body>
+</html>
