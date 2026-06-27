@@ -33,6 +33,14 @@
     serverUrl: $('serverUrl'), iosNote: $('iosNote'),
   };
 
+  // ---- ネイティブ(Capacitor)判定 ----
+  // ネイティブアプリとして動いているときは、ブラウザのTTSではなく
+  // ネイティブ音声合成(@capacitor-community/text-to-speech)を使う。
+  // これによりバックグラウンド音声モードと組み合わせて裏読み上げが可能になる。
+  const Cap = window.Capacitor;
+  const isNative = !!(Cap && typeof Cap.isNativePlatform === 'function' && Cap.isNativePlatform());
+  const NativeTTS = (isNative && Cap.Plugins && Cap.Plugins.TextToSpeech) ? Cap.Plugins.TextToSpeech : null;
+
   // ---- 状態 ----
   const synth = window.speechSynthesis;
   let voices = [];
@@ -227,27 +235,39 @@
     renderFeed(item.id);
 
     let phrase = item.text;
-    if (el.readName.checked && item.name) phrase = `${item.name}さん。${item.text}`;
-
-    const u = new SpeechSynthesisUtterance(phrase);
-    const v = selectedVoice();
-    if (v) { u.voice = v; u.lang = v.lang; } else { u.lang = 'ja-JP'; }
-    u.rate = parseFloat(el.rate.value);
-    u.pitch = parseFloat(el.pitch.value);
-    u.volume = parseFloat(el.volume.value);
+    // 通常コメントのみ「○○さん。」を前置（イベント告知は本文に名前を含むので除外）
+    const isAnnouncement = /^[🎁💗🔁🚪]/.test(item.name || '');
+    if (el.readName.checked && item.name && !isAnnouncement) phrase = `${item.name}さん。${item.text}`;
 
     const done = () => {
       isSpeaking = false;
       setTimeout(pump, 60); // 連続発話の安定化
     };
+    speakPhrase(phrase, done);
+  }
+
+  // Web / ネイティブ 両対応の発話
+  function speakPhrase(phrase, done) {
+    const rate = parseFloat(el.rate.value);
+    const pitch = parseFloat(el.pitch.value);
+    const volume = parseFloat(el.volume.value);
+    const v = selectedVoice();
+    const lang = (v && /ja/i.test(v.lang)) ? v.lang : 'ja-JP';
+
+    if (NativeTTS) {
+      // ネイティブ音声（iOS: AVSpeechSynthesizer）。category:'playback' で
+      // 他アプリ前面時/画面ロック時も鳴らせるようにする。
+      NativeTTS.speak({ text: phrase, lang, rate, pitch, volume, category: 'playback' })
+        .then(done, done);
+      return;
+    }
+
+    const u = new SpeechSynthesisUtterance(phrase);
+    if (v) { u.voice = v; u.lang = v.lang; } else { u.lang = 'ja-JP'; }
+    u.rate = rate; u.pitch = pitch; u.volume = volume;
     u.onend = done;
     u.onerror = done;
-
-    try {
-      synth.speak(u);
-    } catch (_) {
-      done();
-    }
+    try { synth.speak(u); } catch (_) { done(); }
   }
 
   // iOS/Chrome の「一定時間で止まる」対策のキープアライブ
@@ -256,6 +276,38 @@
       try { synth.resume(); } catch (_) {}
     }
   }, 5000);
+
+  // ---- バックグラウンド維持用の無音オーディオ（ネイティブアプリ専用）----
+  // iOS では「音声を再生中のアプリ」は背面でも生かされる。無音をループ再生して
+  // アプリを生かし続け、ネイティブTTSの裏読み上げを継続させる。
+  let keepAlive = null;
+  function buildSilentWavUrl(seconds) {
+    const rate = 8000;
+    const n = rate * seconds;
+    const buf = new ArrayBuffer(44 + n * 2);
+    const dv = new DataView(buf);
+    const w = (off, s) => { for (let i = 0; i < s.length; i++) dv.setUint8(off + i, s.charCodeAt(i)); };
+    w(0, 'RIFF'); dv.setUint32(4, 36 + n * 2, true); w(8, 'WAVE');
+    w(12, 'fmt '); dv.setUint32(16, 16, true); dv.setUint16(20, 1, true);
+    dv.setUint16(22, 1, true); dv.setUint32(24, rate, true);
+    dv.setUint32(28, rate * 2, true); dv.setUint16(32, 2, true); dv.setUint16(34, 16, true);
+    w(36, 'data'); dv.setUint32(40, n * 2, true); // 本体はゼロ＝無音
+    return URL.createObjectURL(new Blob([buf], { type: 'audio/wav' }));
+  }
+  function startKeepAlive() {
+    if (!isNative) return; // 背面維持が必要なのはネイティブアプリのときだけ
+    try {
+      if (!keepAlive) {
+        keepAlive = new Audio(buildSilentWavUrl(1));
+        keepAlive.loop = true;
+        keepAlive.volume = 0.001;
+      }
+      keepAlive.play().catch(() => {});
+    } catch (_) {}
+  }
+  function stopKeepAlive() {
+    try { if (keepAlive) keepAlive.pause(); } catch (_) {}
+  }
 
   // ---- 表示 ----
   function renderFeed(speakingId) {
@@ -294,6 +346,7 @@
     el.speakIcon.textContent = '⏹';
     el.speakLabel.textContent = '読み上げを停止';
     unlockAudio(); // 効果音用の AudioContext を解放
+    startKeepAlive(); // ネイティブアプリの背面維持
     // 無音の発話で iOS の音声出力を解放
     try {
       const warm = new SpeechSynthesisUtterance(' ');
@@ -309,6 +362,8 @@
     el.speakIcon.textContent = '🔊';
     el.speakLabel.textContent = '読み上げを開始';
     try { synth.cancel(); } catch (_) {}
+    if (NativeTTS) { try { NativeTTS.stop(); } catch (_) {} }
+    stopKeepAlive();
     isSpeaking = false;
     renderFeed();
   }
@@ -481,6 +536,7 @@
   el.clearBtn.addEventListener('click', () => {
     queue = [];
     try { synth.cancel(); } catch (_) {}
+    if (NativeTTS) { try { NativeTTS.stop(); } catch (_) {} }
     isSpeaking = false;
     renderFeed();
   });

@@ -1,0 +1,80 @@
+name: Build iOS IPA (unsigned, for SideStore)
+
+# 無料の macOS ランナーで、署名なしの IPA を生成します。
+# 生成された IPA は SideStore / AltStore が「あなたの無料Apple ID」で
+# 再署名してインストールします（年¥15,000のApple Developerは不要）。
+
+on:
+  workflow_dispatch: {}   # GitHub の Actions タブから手動実行
+  push:
+    branches: [ "claude/tiktok-comment-tts-eye7ai" ]
+    paths:
+      - "index.html"
+      - "app.js"
+      - "manifest.webmanifest"
+      - "sw.js"
+      - "icon.svg"
+      - "package.json"
+      - "capacitor.config.json"
+      - "scripts/**"
+      - ".github/workflows/ios-build.yml"
+
+jobs:
+  build:
+    runs-on: macos-14
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Add iOS platform (copies web assets + pod install)
+        run: npm run ios:add
+
+      - name: Enable background audio (UIBackgroundModes = audio)
+        run: |
+          PLIST=ios/App/App/Info.plist
+          /usr/libexec/PlistBuddy -c "Delete :UIBackgroundModes" "$PLIST" 2>/dev/null || true
+          /usr/libexec/PlistBuddy -c "Add :UIBackgroundModes array" "$PLIST"
+          /usr/libexec/PlistBuddy -c "Add :UIBackgroundModes:0 string audio" "$PLIST"
+          echo "--- Info.plist UIBackgroundModes ---"
+          /usr/libexec/PlistBuddy -c "Print :UIBackgroundModes" "$PLIST"
+
+      - name: Build unsigned .app
+        run: |
+          xcodebuild \
+            -workspace ios/App/App.xcworkspace \
+            -scheme App \
+            -configuration Release \
+            -sdk iphoneos \
+            -derivedDataPath build \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            build
+
+      - name: Package into unsigned IPA
+        run: |
+          APP_PATH=$(find build/Build/Products/Release-iphoneos -maxdepth 1 -name "*.app" | head -n 1)
+          echo "App: $APP_PATH"
+          rm -rf Payload
+          mkdir -p Payload
+          cp -R "$APP_PATH" Payload/
+          zip -qr app-unsigned.ipa Payload
+          echo "Built app-unsigned.ipa"
+          ls -lh app-unsigned.ipa
+
+      - name: Upload IPA artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: tiktok-comment-tts-ipa
+          path: app-unsigned.ipa
+          if-no-files-found: error
+          retention-days: 30
