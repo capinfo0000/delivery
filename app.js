@@ -26,6 +26,7 @@
     volume: $('volume'), volumeOut: $('volumeOut'),
     readName: $('readName'), stripEmoji: $('stripEmoji'),
     skipUrl: $('skipUrl'), dropWhenBusy: $('dropWhenBusy'),
+    readGift: $('readGift'), readSocial: $('readSocial'), readMember: $('readMember'),
     maxLen: $('maxLen'), maxLenOut: $('maxLenOut'),
     maxQueue: $('maxQueue'), maxQueueOut: $('maxQueueOut'),
     testBtn: $('testBtn'), clearBtn: $('clearBtn'),
@@ -56,6 +57,9 @@
       stripEmoji: el.stripEmoji.checked,
       skipUrl: el.skipUrl.checked,
       dropWhenBusy: el.dropWhenBusy.checked,
+      readGift: el.readGift.checked,
+      readSocial: el.readSocial.checked,
+      readMember: el.readMember.checked,
       maxLen: parseInt(el.maxLen.value, 10),
       maxQueue: parseInt(el.maxQueue.value, 10),
       serverUrl: el.serverUrl.value.trim(),
@@ -77,6 +81,9 @@
     if (s.stripEmoji != null) el.stripEmoji.checked = s.stripEmoji;
     if (s.skipUrl != null) el.skipUrl.checked = s.skipUrl;
     if (s.dropWhenBusy != null) el.dropWhenBusy.checked = s.dropWhenBusy;
+    if (s.readGift != null) el.readGift.checked = s.readGift;
+    if (s.readSocial != null) el.readSocial.checked = s.readSocial;
+    if (s.readMember != null) el.readMember.checked = s.readMember;
     if (s.maxLen != null) el.maxLen.value = s.maxLen;
     if (s.maxQueue != null) el.maxQueue.value = s.maxQueue;
     if (s.username) el.username.value = s.username;
@@ -145,6 +152,49 @@
     recent.push(key);
     if (recent.length > 30) recent.shift();
     return false;
+  }
+
+  // ---- 効果音（Web Audio。外部ファイル不要で自前生成）----
+  let audioCtx = null;
+  function unlockAudio() {
+    try {
+      if (!audioCtx) {
+        const AC = window.AudioContext || window.webkitAudioContext;
+        if (AC) audioCtx = new AC();
+      }
+      if (audioCtx && audioCtx.state === 'suspended') audioCtx.resume();
+    } catch (_) {}
+  }
+  function playChime(type) {
+    if (!audioCtx) return;
+    // type ごとに音階を変える（gift=明るい上昇, follow=2音, join=単音）
+    const notes = type === 'gift' ? [659, 784, 988, 1175]
+      : type === 'follow' ? [587, 880]
+      : [523];
+    const now = audioCtx.currentTime;
+    notes.forEach((freq, i) => {
+      const osc = audioCtx.createOscillator();
+      const gain = audioCtx.createGain();
+      osc.type = 'triangle';
+      osc.frequency.value = freq;
+      osc.connect(gain); gain.connect(audioCtx.destination);
+      const t = now + i * 0.1;
+      gain.gain.setValueAtTime(0.0001, t);
+      gain.gain.linearRampToValueAtTime(0.3, t + 0.02);
+      gain.gain.exponentialRampToValueAtTime(0.0001, t + 0.28);
+      osc.start(t); osc.stop(t + 0.3);
+    });
+  }
+
+  // ---- イベント（ギフト等）のアナウンスをキューに積む ----
+  function enqueueAnnouncement(label, text, soundType) {
+    if (soundType) playChime(soundType);
+    const item = { id: Date.now() + '-' + Math.round(performance.now()), name: label, text };
+    queue.push(item);
+    const maxQ = parseInt(el.maxQueue.value, 10);
+    if (el.dropWhenBusy.checked) { while (queue.length > maxQ) queue.shift(); }
+    renderFeed();
+    pump();
   }
 
   // ---- コメント受信 → キュー投入 ----
@@ -243,6 +293,7 @@
     el.speakToggle.classList.add('on');
     el.speakIcon.textContent = '⏹';
     el.speakLabel.textContent = '読み上げを停止';
+    unlockAudio(); // 効果音用の AudioContext を解放
     // 無音の発話で iOS の音声出力を解放
     try {
       const warm = new SpeechSynthesisUtterance(' ');
@@ -324,6 +375,37 @@
       onComment(name, data.comment || '');
     });
 
+    // ギフト（連打ギフトは終了時にまとめて読み上げ）
+    socket.on('gift', (data) => {
+      if (!el.readGift.checked) return;
+      // giftType===1 は連打ギフト。repeatEnd=false の途中経過はスキップ
+      if (data.giftType === 1 && data.repeatEnd === false) return;
+      const name = data.nickname || data.uniqueId || 'どなたか';
+      const giftName = data.giftName || data.extendedGiftInfo?.name || 'ギフト';
+      const count = data.repeatCount || 1;
+      const countText = count > 1 ? `${count}個` : '';
+      enqueueAnnouncement('🎁 ギフト', `${name}さんが${giftName}${countText}をくれました！ありがとう！`, 'gift');
+    });
+
+    // フォロー / シェア（social イベント）
+    socket.on('social', (data) => {
+      if (!el.readSocial.checked) return;
+      const name = data.nickname || data.uniqueId || 'どなたか';
+      const kind = (data.displayType || '') + ' ' + (data.label || '');
+      if (/follow/i.test(kind)) {
+        enqueueAnnouncement('💗 フォロー', `${name}さんがフォローしました！ありがとう！`, 'follow');
+      } else if (/share/i.test(kind)) {
+        enqueueAnnouncement('🔁 シェア', `${name}さんがシェアしてくれました！`, 'follow');
+      }
+    });
+
+    // 入室（既定オフ。多いと賑やかなので）
+    socket.on('member', (data) => {
+      if (!el.readMember.checked) return;
+      const name = data.nickname || data.uniqueId || 'どなたか';
+      enqueueAnnouncement('🚪 入室', `${name}さんが入室しました`, 'join');
+    });
+
     socket.on('disconnect', () => {
       if (socket) setStatus('error', '切断されました');
       el.disconnectBtn.disabled = true;
@@ -373,9 +455,18 @@
     el.demoBtn.textContent = '⏹ デモを停止';
     let i = 0;
     const tick = () => {
-      const [n, t] = DEMO[i % DEMO.length];
+      // 3回に1回はギフト/フォローのデモ（効果音の確認用）
+      if (i > 0 && i % 3 === 0 && el.readGift.checked) {
+        const [n] = DEMO[i % DEMO.length];
+        enqueueAnnouncement('🎁 ギフト', `${n}さんがバラ3個をくれました！ありがとう！`, 'gift');
+      } else if (i > 0 && i % 4 === 0 && el.readSocial.checked) {
+        const [n] = DEMO[i % DEMO.length];
+        enqueueAnnouncement('💗 フォロー', `${n}さんがフォローしました！ありがとう！`, 'follow');
+      } else {
+        const [n, t] = DEMO[i % DEMO.length];
+        onComment(n, t);
+      }
       i++;
-      onComment(n, t);
     };
     tick();
     demoTimer = setInterval(tick, 3500);
@@ -397,7 +488,8 @@
   for (const ctrl of [el.rate, el.pitch, el.volume, el.maxLen, el.maxQueue]) {
     ctrl.addEventListener('input', () => { refreshOutputs(); saveSettings(); });
   }
-  for (const ctrl of [el.voice, el.readName, el.stripEmoji, el.skipUrl, el.dropWhenBusy, el.username, el.serverUrl]) {
+  for (const ctrl of [el.voice, el.readName, el.stripEmoji, el.skipUrl, el.dropWhenBusy,
+    el.readGift, el.readSocial, el.readMember, el.username, el.serverUrl]) {
     ctrl.addEventListener('change', saveSettings);
   }
 
