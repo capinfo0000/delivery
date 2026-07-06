@@ -22,6 +22,10 @@ TikTok LIVE のコメントを、スマホのブラウザで**リアルタイム
 ざっくり：GitHub Actions（無料macビルド）で IPA を生成 → Windows の SideStore で
 無料Apple IDインストール。ネイティブ音声合成＋バックグラウンド音声で裏読み上げします。
 
+ネイティブ実装は2系統あります（どちらも同じ無料サイドロード方式）:
+- **Capacitor版**（今のWeb画面を流用）… ルート直下 + `IOS-APP.md`
+- **React Native + Expo版**（作り直し・背面音声に注力）… `mobile/` + `mobile/README.md`
+
 ## しくみ（重要）
 
 ブラウザから TikTok へ直接コメントを取りに行くことはできません（CORS・署名の制限）。
