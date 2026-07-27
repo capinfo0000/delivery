@@ -1,0 +1,9 @@
+{
+  "appId": "jp.co.capinfo.tiktoktts",
+  "appName": "コメント読み上げ",
+  "webDir": "www",
+  "ios": {
+    "contentInset": "always",
+    "backgroundColor": "#0b0b12"
+  }
+}

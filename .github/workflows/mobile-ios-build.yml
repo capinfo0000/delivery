@@ -1,0 +1,73 @@
+name: Build RN(Expo) iOS IPA (unsigned, for SideStore)
+
+# React Native + Expo 版を、無料の macOS ランナーで署名なし IPA にビルドします。
+# 生成 IPA は SideStore / AltStore が無料Apple IDで再署名してインストールします。
+
+on:
+  workflow_dispatch: {}
+  push:
+    branches: [ "claude/tiktok-comment-tts-eye7ai" ]
+    paths:
+      - "mobile/**"
+      - ".github/workflows/mobile-ios-build.yml"
+
+jobs:
+  build:
+    runs-on: macos-14
+    timeout-minutes: 45
+    defaults:
+      run:
+        working-directory: mobile
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Align dependency versions to Expo SDK
+        run: npx expo install --fix || true
+
+      - name: Expo prebuild (generate native iOS project)
+        run: |
+          npx expo prebuild -p ios --no-install
+          cd ios && pod install
+
+      - name: Build unsigned .app
+        run: |
+          WS=$(find ios -maxdepth 1 -name "*.xcworkspace" | head -n 1)
+          SCHEME=$(basename "$WS" .xcworkspace)
+          echo "Workspace: $WS / Scheme: $SCHEME"
+          xcodebuild \
+            -workspace "$WS" \
+            -scheme "$SCHEME" \
+            -configuration Release \
+            -sdk iphoneos \
+            -derivedDataPath build \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            build
+
+      - name: Package into unsigned IPA
+        run: |
+          APP_PATH=$(find build/Build/Products/Release-iphoneos -maxdepth 1 -name "*.app" | head -n 1)
+          echo "App: $APP_PATH"
+          rm -rf Payload
+          mkdir -p Payload
+          cp -R "$APP_PATH" Payload/
+          zip -qr app-unsigned.ipa Payload
+          ls -lh app-unsigned.ipa
+
+      - name: Upload IPA artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: tiktok-comment-tts-rn-ipa
+          path: mobile/app-unsigned.ipa
+          if-no-files-found: error
+          retention-days: 30

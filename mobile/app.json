@@ -1,0 +1,22 @@
+{
+  "expo": {
+    "name": "CommentTTS",
+    "slug": "tiktok-comment-tts",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "dark",
+    "backgroundColor": "#0b0b12",
+    "ios": {
+      "bundleIdentifier": "jp.co.capinfo.tiktoktts",
+      "supportsTablet": true,
+      "infoPlist": {
+        "CFBundleDisplayName": "コメント読み上げ",
+        "UIBackgroundModes": ["audio"]
+      }
+    },
+    "android": {
+      "package": "jp.co.capinfo.tiktoktts"
+    },
+    "plugins": ["expo-av"]
+  }
+}
